@@ -1,0 +1,6 @@
+/node_modules
+/responses
+/uploads
+/.env
+/package-lock.json
+/server.js
