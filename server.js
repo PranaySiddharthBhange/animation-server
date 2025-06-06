@@ -1,4 +1,5 @@
 const express = require('express');
+const cors = require('cors');
 const multer = require('multer');
 const AdmZip = require('adm-zip');
 const fs = require('fs');
@@ -41,7 +42,7 @@ const upload = multer({ storage });
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-
+app.use(cors());
 // Endpoint to handle processing requests
 app.post('/process', upload.single('zipfile'), (req, res) => {
   try {
