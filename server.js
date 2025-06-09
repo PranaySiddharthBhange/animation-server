@@ -7,17 +7,13 @@ const path = require('path');
 const axios = require('axios');
 const { v4: uuidv4 } = require('uuid');
 const FormData = require('form-data');
-require('dotenv').config(); // Load environment variables
+require('dotenv').config();
 
 const app = express();
 const port = process.env.PORT || 3000;
 
-// Forge credentials from environment variables
 const FORGE_CLIENT_ID = process.env.FORGE_CLIENT_ID;
 const FORGE_CLIENT_SECRET = process.env.FORGE_CLIENT_SECRET;
-
-// Global session storage
-const sessions = {};
 
 // Configure storage for uploaded ZIP files
 const storage = multer.diskStorage({
@@ -43,6 +39,42 @@ const upload = multer({ storage });
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(cors());
+
+// Session management functions
+function getSession(sessionId) {
+  try {
+    const sessionPath = path.join('responses', `session_${sessionId}`, 'session.json');
+    if (fs.existsSync(sessionPath)) {
+      return JSON.parse(fs.readFileSync(sessionPath, 'utf-8'));
+    }
+    return null;
+  } catch (error) {
+    console.error(`Error reading session ${sessionId}:`, error);
+    return null;
+  }
+}
+
+function updateSession(sessionId, update) {
+  const sessionFolder = path.join('responses', `session_${sessionId}`);
+  const sessionPath = path.join(sessionFolder, 'session.json');
+  
+  try {
+    let session = {};
+    if (fs.existsSync(sessionPath)) {
+      session = JSON.parse(fs.readFileSync(sessionPath, 'utf-8'));
+    }
+    
+    const updatedSession = {...session, ...update};
+    fs.mkdirSync(sessionFolder, { recursive: true });
+    fs.writeFileSync(sessionPath, JSON.stringify(updatedSession, null, 2));
+    
+    return updatedSession;
+  } catch (error) {
+    console.error(`Error updating session ${sessionId}:`, error);
+    return null;
+  }
+}
+
 // Endpoint to handle processing requests
 app.post('/process', upload.single('zipfile'), (req, res) => {
   try {
@@ -52,14 +84,13 @@ app.post('/process', upload.single('zipfile'), (req, res) => {
 
     const zipPath = req.file.path;
     const sessionId = uuidv4();
-  
 
     // Create session entry
-    sessions[sessionId] = {
+    updateSession(sessionId, {
       status: 'queued',
       message: 'Processing started',
       progress: 0
-    };
+    });
 
     // Create session directories
     const sessionFolder = `session_${sessionId}`;
@@ -94,7 +125,7 @@ app.post('/process', upload.single('zipfile'), (req, res) => {
 // Session status endpoint
 app.get('/status/:sessionId', (req, res) => {
   const sessionId = req.params.sessionId;
-  const session = sessions[sessionId];
+  const session = getSession(sessionId);
   
   if (!session) {
     return res.status(404).json({ error: 'Session not found' });
@@ -111,7 +142,9 @@ app.get('/status/:sessionId', (req, res) => {
 
 app.get('/generate-animation/:sessionId', async (req, res) => {
   const sessionId = req.params.sessionId;
-  if (!sessionId || !sessions[sessionId]) {
+  const session = getSession(sessionId);
+  
+  if (!session) {
     return res.status(400).json({ error: 'Invalid or missing sessionId' });
   }
 
@@ -155,6 +188,7 @@ app.get('/generate-animation/:sessionId', async (req, res) => {
       }
     });
 
+
     const prompt = `
 You are an expert 3D animation assistant for Autodesk Forge models. 
 Generate a sequence of animation commands for the following fragments that will create a logical, visually appealing animation of disassembly.
@@ -177,10 +211,16 @@ Command format (JSON array of objects):
 ]
 
 Guidelines:
-1. Disassemble outer to inner parts.
-2. Logical, mechanical motions.
-3. 20-30 steps to fully disassemble and reassemble.
-Return only JSON, no extra text.
+1. Create an disassembly view showing assembly relationships
+2. Move parts along logical axes based on their position in the assembly
+3. Rotate rotating components (shaft, rotor, screws) to show movements of disassembly
+4. Scale small parts to make them more visible
+5. Use reasonable translations depending on part size for disassembly
+6. Include 20-30 commands for a comprehensive animation at the end assembly should disassemble completely and then reassemble
+7. Prioritize moving outer components first then inner ones
+8. Consider mechanical relationships between parts
+
+Generate only the JSON array with no additional text.
 `.trim();
 
     const geminiRes = await axios.post(
@@ -199,7 +239,7 @@ Return only JSON, no extra text.
 
     let text = geminiRes.data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || "";
 
-    // Clean code blocks (if present)
+    // Clean code blocks
     if (text.startsWith("```json")) text = text.replace(/^```json/, "").replace(/```$/, "").trim();
     else if (text.startsWith("```")) text = text.replace(/^```/, "").replace(/```$/, "").trim();
 
@@ -223,7 +263,6 @@ Return only JSON, no extra text.
   }
 });
 
-
 // Health check endpoint
 app.get('/health', (req, res) => {
   res.status(200).send('Server is healthy');
@@ -241,14 +280,6 @@ function base64EncodeUrn(urn) {
     .replace(/=/g, '')
     .replace(/\+/g, '-')
     .replace(/\//g, '_');
-}
-
-// Update session status helper
-function updateSession(sessionId, update) {
-  sessions[sessionId] = {
-    ...sessions[sessionId],
-    ...update
-  };
 }
 
 // Forge API functions
@@ -299,7 +330,7 @@ async function createBucket(accessToken, bucketKey, responsePath) {
     saveResponseToFile(responsePath, '02_create_bucket', response.data);
     return true;
   } catch (error) {
-    if (error.response?.status === 409) { // Bucket already exists
+    if (error.response?.status === 409) {
       return true;
     }
     throw new Error(`Bucket creation failed: ${error.response?.data || error.message}`);
@@ -523,8 +554,7 @@ async function checkTranslationStatus(accessToken, encodedUrn, responsePath) {
         throw new Error(`Translation ${status}`);
       }
       
-      // Wait 30 seconds before next check
-      await new Promise(resolve => setTimeout(resolve, 30000));
+      await new Promise(resolve => setTimeout(resolve, 500));
     }
     
     throw new Error('Translation timeout after 10 minutes');
@@ -572,7 +602,6 @@ async function getObjectHierarchy(accessToken, encodedUrn, guidViewable, respons
         return response.data;
       }
       
-      // Wait 10 seconds before next check
       await new Promise(resolve => setTimeout(resolve, 10000));
     }
     
@@ -599,7 +628,6 @@ async function retrievePropertiesAllObjects(accessToken, encodedUrn, guidViewabl
         return response.data;
       }
       
-      // Wait 10 seconds before next check
       await new Promise(resolve => setTimeout(resolve, 10000));
     }
     
@@ -618,7 +646,6 @@ async function processFiles(sessionId, folderPath, responsePath) {
       progress: 5
     });
 
-    // Get access token
     const accessToken = await getAccessToken(responsePath);
     if (!accessToken) throw new Error('Failed to get access token');
 
@@ -627,7 +654,6 @@ async function processFiles(sessionId, folderPath, responsePath) {
       progress: 10
     });
     
-    // Create bucket
     const bucketKey = `bucket_${uuidv4().replace(/-/g, '')}`;
     const bucketCreated = await createBucket(accessToken, bucketKey, responsePath);
     if (!bucketCreated) throw new Error('Failed to create bucket');
@@ -637,7 +663,6 @@ async function processFiles(sessionId, folderPath, responsePath) {
       progress: 20
     });
     
-    // Upload files
     await uploadAllFiles(accessToken, bucketKey, folderPath, responsePath);
 
     updateSession(sessionId, {
@@ -645,7 +670,6 @@ async function processFiles(sessionId, folderPath, responsePath) {
       progress: 30
     });
     
-    // Find assembly file
     const assemblyFile = detectAssemblyFile(folderPath);
     if (!assemblyFile) throw new Error('No assembly (.iam) file found');
 
@@ -654,7 +678,6 @@ async function processFiles(sessionId, folderPath, responsePath) {
       progress: 40
     });
     
-    // Link references and start translation
     const linked = await linkReferences(accessToken, bucketKey, assemblyFile, folderPath, responsePath);
     if (!linked) throw new Error('Failed to link references');
 
@@ -671,7 +694,6 @@ async function processFiles(sessionId, folderPath, responsePath) {
       progress: 60
     });
     
-    // Check translation status
     await checkTranslationStatus(accessToken, encodedUrn, responsePath);
 
     updateSession(sessionId, {
@@ -679,7 +701,6 @@ async function processFiles(sessionId, folderPath, responsePath) {
       progress: 70
     });
     
-    // Retrieve metadata
     const guidViewable = await retrieveListOfViewableFiles(accessToken, encodedUrn, responsePath);
     if (!guidViewable) throw new Error('Failed to retrieve viewable files');
 
@@ -688,7 +709,6 @@ async function processFiles(sessionId, folderPath, responsePath) {
       progress: 80
     });
     
-    // Get hierarchy and properties
     await getObjectHierarchy(accessToken, encodedUrn, guidViewable, responsePath);
 
     updateSession(sessionId, {
@@ -714,12 +734,58 @@ async function processFiles(sessionId, folderPath, responsePath) {
       error: error.message,
       details: error.stack
     });
+  } finally {
+    // Clean up unzipped files
+    try {
+      fs.rmSync(folderPath, { recursive: true, force: true });
+      console.log(`Cleaned up folder: ${folderPath}`);
+    } catch (cleanupError) {
+      console.error(`Cleanup failed for ${folderPath}:`, cleanupError);
+    }
+  }
+}
+
+// Session cleanup on startup
+function cleanupOldSessions() {
+  const now = Date.now();
+  const maxAge = 24 * 60 * 60 * 1000; // 24 hours
+  
+  try {
+    const sessionDirs = fs.readdirSync('responses')
+      .filter(dir => dir.startsWith('session_'))
+      .map(dir => ({
+        path: path.join('responses', dir),
+        name: dir,
+        sessionId: dir.replace('session_', '')
+      }));
+    
+    for (const sessionDir of sessionDirs) {
+      try {
+        const session = getSession(sessionDir.sessionId);
+        if (!session) continue;
+        
+        // Delete sessions older than maxAge
+        const createdTime = new Date(session.createdAt || 0).getTime();
+        if (now - createdTime > maxAge) {
+          fs.rmSync(sessionDir.path, { recursive: true, force: true });
+          console.log(`Cleaned up old session: ${sessionDir.name}`);
+        }
+      } catch (error) {
+        console.error(`Error cleaning session ${sessionDir.name}:`, error);
+      }
+    }
+  } catch (error) {
+    console.error('Session cleanup failed:', error);
   }
 }
 
 // Start the server
 app.listen(port, () => {
   console.log(`Server running on port ${port}`);
+  
+  // Add creation timestamp to session files
+  cleanupOldSessions();
+  
   if (!FORGE_CLIENT_ID || !FORGE_CLIENT_SECRET) {
     console.error('Missing Forge credentials in environment variables!');
   }
