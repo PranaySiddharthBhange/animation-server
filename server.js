@@ -48,7 +48,7 @@ const storage = multer.diskStorage({
   }
 });
 
-const upload = multer({
+const upload = multer({ 
   storage,
   limits: {
     fileSize: CONFIG.MAX_FILE_SIZE,
@@ -101,7 +101,7 @@ class SessionManager {
 
     try {
       let session = { createdAt: new Date().toISOString() };
-
+      
       try {
         const existingData = await fs.readFile(sessionPath, 'utf-8');
         session = JSON.parse(existingData);
@@ -109,10 +109,10 @@ class SessionManager {
         // File doesn't exist, use default session
       }
 
-      const updatedSession = {
-        ...session,
-        ...update,
-        updatedAt: new Date().toISOString()
+      const updatedSession = { 
+        ...session, 
+        ...update, 
+        updatedAt: new Date().toISOString() 
       };
 
       await fs.mkdir(sessionFolder, { recursive: true });
@@ -136,7 +136,7 @@ class SessionManager {
         if (entry.isDirectory() && entry.name.startsWith('session_')) {
           const sessionPath = path.join(responsesDir, entry.name);
           const sessionFile = path.join(sessionPath, 'session.json');
-
+          
           try {
             const stats = await fs.stat(sessionFile);
             if (stats.mtime.getTime() < cutoffTime) {
@@ -177,7 +177,7 @@ class FileUtils {
   static extractEssentialData(stepName, data) {
     switch (stepName) {
       case '01_get_access_token':
-        return {
+        return { 
           access_token: data.access_token,
           expires_in: data.expires_in,
           token_type: data.token_type
@@ -589,7 +589,7 @@ class ForgeClient {
 // Enhanced main processing function
 async function processFiles(sessionId, folderPath, responsePath) {
   const forgeClient = new ForgeClient(CONFIG.FORGE_CLIENT_ID, CONFIG.FORGE_CLIENT_SECRET);
-
+  
   try {
     await SessionManager.updateSession(sessionId, {
       status: 'processing',
@@ -612,7 +612,7 @@ async function processFiles(sessionId, folderPath, responsePath) {
       progress: 20
     });
 
-    await forgeClient.uploadAllFiles(accessToken, bucketKey, folderPath, responsePath,
+    await forgeClient.uploadAllFiles(accessToken, bucketKey, folderPath, responsePath, 
       (msg) => SessionManager.updateSession(sessionId, { message: msg, progress: 25 }));
 
     await SessionManager.updateSession(sessionId, {
@@ -698,7 +698,7 @@ app.post('/process', upload.single('zipfile'), async (req, res) => {
 
   try {
     if (!req.file) {
-      return res.status(400).json({
+      return res.status(400).json({ 
         error: 'ZIP file is required',
         code: 'MISSING_FILE'
       });
@@ -734,7 +734,7 @@ app.post('/process', upload.single('zipfile'), async (req, res) => {
     const sessionFolder = `session_${sessionId}`;
     const uploadPath = path.join('uploads', sessionFolder);
     const responsePath = path.join('responses', sessionFolder);
-
+    
     await fs.mkdir(uploadPath, { recursive: true });
     await fs.mkdir(responsePath, { recursive: true });
 
@@ -755,13 +755,13 @@ app.post('/process', upload.single('zipfile'), async (req, res) => {
 
   } catch (error) {
     console.error('Process endpoint error:', error.message);
-
+    
     if (sessionId) {
       await SessionManager.updateSession(sessionId, {
         status: 'failed',
         message: 'Failed to start processing',
         error: error.message
-      }).catch(() => { });
+      }).catch(() => {});
     }
 
     res.status(500).json({
@@ -780,9 +780,9 @@ app.post('/process', upload.single('zipfile'), async (req, res) => {
 app.get('/status/:sessionId', async (req, res) => {
   try {
     const sessionId = req.params.sessionId;
-
+    
     if (!sessionId || !sessionId.match(/^[a-f0-9-]+$/i)) {
-      return res.status(400).json({
+      return res.status(400).json({ 
         error: 'Invalid session ID format',
         code: 'INVALID_SESSION_ID'
       });
@@ -791,7 +791,7 @@ app.get('/status/:sessionId', async (req, res) => {
     const session = await SessionManager.getSession(sessionId);
 
     if (!session) {
-      return res.status(404).json({
+      return res.status(404).json({ 
         error: 'Session not found',
         code: 'SESSION_NOT_FOUND'
       });
@@ -822,14 +822,14 @@ app.get('/generate-animation/:sessionId', async (req, res) => {
     const session = await SessionManager.getSession(sessionId);
 
     if (!session) {
-      return res.status(404).json({
+      return res.status(404).json({ 
         error: 'Session not found',
         code: 'SESSION_NOT_FOUND'
       });
     }
 
     if (session.status !== 'completed') {
-      return res.status(400).json({
+      return res.status(400).json({ 
         error: 'Session processing not completed',
         code: 'SESSION_NOT_READY',
         currentStatus: session.status
@@ -847,7 +847,7 @@ app.get('/generate-animation/:sessionId', async (req, res) => {
 
     // Generate animation using Gemini
     const animationCommands = await generateAnimationWithGemini(hierarchyData, propertiesData);
-
+    
     res.json(animationCommands);
 
   } catch (error) {
@@ -967,7 +967,7 @@ app.listen(port, async () => {
   console.log(`Server running on http://localhost:${port}`);
   await initializeDirectories();
   console.log('Directories initialized');
-
+  
   // Start session cleanup interval
   setInterval(() => {
     SessionManager.cleanupOldSessions().catch(error => {
